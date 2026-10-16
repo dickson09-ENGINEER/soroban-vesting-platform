@@ -7,16 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added — 2026-10-16
+### Changed — 2026-10-16
 
-- contracts/vesting/src/lib.rs: `schedule_exists(env, schedule_id: u64) -> bool`
-  view function (#105). Returns `true` if a schedule with the given ID exists in
-  persistent storage, `false` otherwise. Lets callers safely probe for schedule
-  existence without catching a panic — especially useful when iterating over a
-  range of IDs. Read-only (no TTL bump). Two new tests:
-  `test_schedule_exists_true_and_false` (true for created, false for
-  never-created ID), `test_schedule_exists_after_claim` (still true after the
-  schedule is completed). README updated with function entry.
+- .github/workflows/ci.yml: bumped `node-version` from `'20'` to `'24'` in the
+  backend and frontend jobs (#85). GitHub Actions was already forcing Node 20
+  jobs to run on Node 24 and emitting a deprecation annotation on every CI run.
+  Explicitly setting `'24'` eliminates the annotation and makes the CI
+  configuration match the runtime in use. The backend `package.json` engine
+  constraint (`>=18.0.0`) is fully compatible with Node 24.
 
 ### Tests — 2026-10-16
 
