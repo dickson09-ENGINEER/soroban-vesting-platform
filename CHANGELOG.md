@@ -7,16 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added — 2026-10-16
+### Changed — 2026-10-16
 
-- contracts/vesting/src/lib.rs: `time_until_cliff(env, schedule_id: u64) -> u64`
-  view function (#98). Returns `(start_time + cliff_duration).saturating_sub(now)`.
-  Returns `0` when the cliff has already passed or `cliff_duration` is `0`.
-  Useful for frontend countdown displays and SDK clients that need "time until
-  cliff" without computing it client-side. Read-only (no TTL bump). Two new
-  tests: `test_time_until_cliff_before_and_at_and_after` (positive before cliff,
-  0 at and after cliff), `test_time_until_cliff_zero_cliff` (always 0 with no
-  cliff). README updated with function entry.
+- .github/workflows/ci.yml: bumped `node-version` from `'20'` to `'24'` in the
+  backend and frontend jobs (#85). GitHub Actions was already forcing Node 20
+  jobs to run on Node 24 and emitting a deprecation annotation on every CI run.
+  Explicitly setting `'24'` eliminates the annotation and makes the CI
+  configuration match the runtime in use. The backend `package.json` engine
+  constraint (`>=18.0.0`) is fully compatible with Node 24.
 
 ### Tests — 2026-10-16
 

@@ -188,16 +188,12 @@ Read-only; does not extend TTL.
 
 ---
 
-### `time_until_cliff(env, schedule_id: u64) -> u64`
+### `schedule_exists(env, schedule_id: u64) -> bool`
 
-Returns the number of seconds until the cliff expires
-(`start_time + cliff_duration - now`), clamped to `0` via `saturating_sub`.
-Returns `0` if the cliff has already passed or if `cliff_duration` is `0`.
-Useful for frontend countdown displays and SDK clients that need "time until
-cliff" without computing it client-side.
+Returns `true` if a schedule with the given ID exists in storage, `false`
+otherwise.  Lets callers safely probe for schedule existence without catching a
+panic, which is particularly useful when iterating over a range of IDs.
 Read-only; does not extend TTL.
-
-**Panics:** `"schedule not found"` — schedule ID does not exist
 
 ---
 
