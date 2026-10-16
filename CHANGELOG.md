@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — 2026-10-16
+
+- .github/workflows/ci.yml: bumped `node-version` from `'20'` to `'24'` in the
+  backend and frontend jobs (#85). GitHub Actions was already forcing Node 20
+  jobs to run on Node 24 and emitting a deprecation annotation on every CI run.
+  Explicitly setting `'24'` eliminates the annotation and makes the CI
+  configuration match the runtime in use. The backend `package.json` engine
+  constraint (`>=18.0.0`) is fully compatible with Node 24.
+
 ### Tests — 2026-10-16
 
 - backend/src/routes/vesting.test.js: expanded test coverage for
