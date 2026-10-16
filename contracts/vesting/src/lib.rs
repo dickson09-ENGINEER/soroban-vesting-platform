@@ -395,6 +395,31 @@ impl VestingContract {
         (schedule.total_amount - vested).max(0)
     }
 
+    /// Return the number of seconds until the cliff expires for a schedule.
+    ///
+    /// Returns `0` if the cliff has already passed (i.e. the current ledger
+    /// timestamp is at or past `start_time + cliff_duration`).
+    ///
+    /// Useful for frontend countdown displays and SDK clients that need to
+    /// show "time until cliff" without computing it client-side.
+    /// Read-only — does not extend the TTL or write any state.
+    ///
+    /// # Auth
+    /// None.
+    ///
+    /// # Panics
+    /// - `schedule_id` does not exist (`VestingError::ScheduleNotFound`)
+    pub fn time_until_cliff(env: Env, schedule_id: u64) -> u64 {
+        let schedule: VestingSchedule = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Schedule(schedule_id))
+            .unwrap_or_else(|| panic_with_error!(&env, VestingError::ScheduleNotFound));
+        let now = env.ledger().timestamp();
+        let cliff_end = schedule.start_time + schedule.cliff_duration;
+        cliff_end.saturating_sub(now)
+    }
+
     /// Extend the contract instance TTL to `INSTANCE_BUMP_LEDGERS`.
     ///
     /// This is a permissionless keep-alive for contracts that are only read
@@ -1452,6 +1477,84 @@ mod tests {
             100_000,
             "token conservation violated: unvested={unvested} + claimable={claimable} + claimed={} != 100_000",
             schedule.claimed_amount
+        );
+    }
+
+    // ── time_until_cliff ──────────────────────────────────────────────────────
+
+    /// time_until_cliff returns a positive value before the cliff and 0 at/after it.
+    #[test]
+    fn test_time_until_cliff_before_and_at_and_after() {
+        let (env, vesting_id, _admin, beneficiary, funder) = setup();
+        let token = new_token(&env, &funder, 100_000);
+        let vesting = VestingContractClient::new(&env, &vesting_id);
+        let start = env.ledger().timestamp();
+
+        let id = vesting.create_schedule(&CreateScheduleParams {
+            from: funder.clone(),
+            beneficiary: beneficiary.clone(),
+            token_address: token,
+            total_amount: 100_000,
+            start_time: start,
+            cliff_duration: 50,
+            total_duration: 100,
+        });
+
+        // At start: cliff_end = start + 50, now = start → 50 seconds remaining.
+        assert_eq!(
+            vesting.time_until_cliff(&id),
+            50,
+            "expected 50 seconds until cliff at start"
+        );
+
+        // At t = start + 25: 25 seconds remaining.
+        env.ledger().with_mut(|l| l.timestamp = start + 25);
+        assert_eq!(
+            vesting.time_until_cliff(&id),
+            25,
+            "expected 25 seconds until cliff at t=start+25"
+        );
+
+        // At exactly the cliff: 0 seconds remaining.
+        env.ledger().with_mut(|l| l.timestamp = start + 50);
+        assert_eq!(
+            vesting.time_until_cliff(&id),
+            0,
+            "expected 0 at the cliff boundary"
+        );
+
+        // After the cliff: still 0 (saturating_sub clamps to 0).
+        env.ledger().with_mut(|l| l.timestamp = start + 75);
+        assert_eq!(
+            vesting.time_until_cliff(&id),
+            0,
+            "expected 0 after cliff has passed"
+        );
+    }
+
+    /// time_until_cliff returns 0 immediately for a zero-cliff schedule.
+    #[test]
+    fn test_time_until_cliff_zero_cliff() {
+        let (env, vesting_id, _admin, beneficiary, funder) = setup();
+        let token = new_token(&env, &funder, 100_000);
+        let vesting = VestingContractClient::new(&env, &vesting_id);
+        let start = env.ledger().timestamp();
+
+        let id = vesting.create_schedule(&CreateScheduleParams {
+            from: funder.clone(),
+            beneficiary: beneficiary.clone(),
+            token_address: token,
+            total_amount: 100_000,
+            start_time: start,
+            cliff_duration: 0,
+            total_duration: 100,
+        });
+
+        // cliff_end == start_time, now == start_time → 0.
+        assert_eq!(
+            vesting.time_until_cliff(&id),
+            0,
+            "zero-cliff schedule should return 0 immediately"
         );
     }
 

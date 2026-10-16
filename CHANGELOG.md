@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — 2026-10-16
+
+- contracts/vesting/src/lib.rs: `time_until_cliff(env, schedule_id: u64) -> u64`
+  view function (#98). Returns `(start_time + cliff_duration).saturating_sub(now)`.
+  Returns `0` when the cliff has already passed or `cliff_duration` is `0`.
+  Useful for frontend countdown displays and SDK clients that need "time until
+  cliff" without computing it client-side. Read-only (no TTL bump). Two new
+  tests: `test_time_until_cliff_before_and_at_and_after` (positive before cliff,
+  0 at and after cliff), `test_time_until_cliff_zero_cliff` (always 0 with no
+  cliff). README updated with function entry.
+
 ### Tests — 2026-10-16
 
 - backend/src/routes/vesting.test.js: expanded test coverage for

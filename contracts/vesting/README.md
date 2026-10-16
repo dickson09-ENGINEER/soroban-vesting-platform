@@ -188,6 +188,19 @@ Read-only; does not extend TTL.
 
 ---
 
+### `time_until_cliff(env, schedule_id: u64) -> u64`
+
+Returns the number of seconds until the cliff expires
+(`start_time + cliff_duration - now`), clamped to `0` via `saturating_sub`.
+Returns `0` if the cliff has already passed or if `cliff_duration` is `0`.
+Useful for frontend countdown displays and SDK clients that need "time until
+cliff" without computing it client-side.
+Read-only; does not extend TTL.
+
+**Panics:** `"schedule not found"` — schedule ID does not exist
+
+---
+
 ### `extend_ttl(env)`
 
 Permissionless. Extends the contract instance TTL to `INSTANCE_BUMP_LEDGERS`
