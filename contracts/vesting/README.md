@@ -188,6 +188,15 @@ Read-only; does not extend TTL.
 
 ---
 
+### `schedule_exists(env, schedule_id: u64) -> bool`
+
+Returns `true` if a schedule with the given ID exists in storage, `false`
+otherwise.  Lets callers safely probe for schedule existence without catching a
+panic, which is particularly useful when iterating over a range of IDs.
+Read-only; does not extend TTL.
+
+---
+
 ### `extend_ttl(env)`
 
 Permissionless. Extends the contract instance TTL to `INSTANCE_BUMP_LEDGERS`

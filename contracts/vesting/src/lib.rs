@@ -395,6 +395,22 @@ impl VestingContract {
         (schedule.total_amount - vested).max(0)
     }
 
+    /// Return `true` if a schedule with the given ID exists in storage,
+    /// `false` otherwise.
+    ///
+    /// Clients can safely probe for schedule existence without catching a
+    /// panic, which is particularly useful when iterating over a range of IDs.
+    /// Read-only — does not extend the TTL or write any state.
+    ///
+    /// # Auth
+    /// None.
+    pub fn schedule_exists(env: Env, schedule_id: u64) -> bool {
+        env.storage()
+            .persistent()
+            .get::<DataKey, VestingSchedule>(&DataKey::Schedule(schedule_id))
+            .is_some()
+    }
+
     /// Extend the contract instance TTL to `INSTANCE_BUMP_LEDGERS`.
     ///
     /// This is a permissionless keep-alive for contracts that are only read
@@ -1452,6 +1468,75 @@ mod tests {
             100_000,
             "token conservation violated: unvested={unvested} + claimable={claimable} + claimed={} != 100_000",
             schedule.claimed_amount
+        );
+    }
+
+    // ── schedule_exists ───────────────────────────────────────────────────────
+
+    /// schedule_exists returns true for a created schedule and false for an ID
+    /// that has never been created.
+    #[test]
+    fn test_schedule_exists_true_and_false() {
+        let (env, vesting_id, _admin, beneficiary, funder) = setup();
+        let token = new_token(&env, &funder, 100_000);
+        let vesting = VestingContractClient::new(&env, &vesting_id);
+        let start = env.ledger().timestamp();
+
+        // Before any schedule: ID 1 does not exist.
+        assert!(
+            !vesting.schedule_exists(&1u64),
+            "schedule_exists should be false before any schedule is created"
+        );
+
+        let id = vesting.create_schedule(&CreateScheduleParams {
+            from: funder.clone(),
+            beneficiary: beneficiary.clone(),
+            token_address: token,
+            total_amount: 100_000,
+            start_time: start,
+            cliff_duration: 0,
+            total_duration: 100,
+        });
+
+        // Existing schedule must return true.
+        assert!(
+            vesting.schedule_exists(&id),
+            "schedule_exists should be true for created schedule"
+        );
+
+        // A never-created ID must return false.
+        assert!(
+            !vesting.schedule_exists(&(id + 1)),
+            "schedule_exists should be false for a non-existent schedule ID"
+        );
+    }
+
+    /// schedule_exists remains true after claim (schedule is Completed, not deleted).
+    #[test]
+    fn test_schedule_exists_after_claim() {
+        let (env, vesting_id, _admin, beneficiary, funder) = setup();
+        let token = new_token(&env, &funder, 100_000);
+        let vesting = VestingContractClient::new(&env, &vesting_id);
+        let start = env.ledger().timestamp();
+
+        let id = vesting.create_schedule(&CreateScheduleParams {
+            from: funder.clone(),
+            beneficiary: beneficiary.clone(),
+            token_address: token,
+            total_amount: 100_000,
+            start_time: start,
+            cliff_duration: 0,
+            total_duration: 100,
+        });
+
+        // Fully claim the schedule.
+        env.ledger().with_mut(|l| l.timestamp = start + 100);
+        vesting.claim(&id);
+
+        // Schedule entry still exists in storage even after completion.
+        assert!(
+            vesting.schedule_exists(&id),
+            "schedule_exists should be true even after the schedule is completed"
         );
     }
 
