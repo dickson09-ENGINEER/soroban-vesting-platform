@@ -53,7 +53,7 @@ Authorization: admin.
 - `"start_time + total_duration overflows u64"` — arithmetic overflow check
 - `"contract is paused"` — contract is paused
 
-**Events:** `("created",)` → `(id: u64, beneficiary: Address, total_amount: i128)`
+**Events:** `("created",)` → `(id: u64, beneficiary: Address, total_amount: i128, token_address: Address)`
 
 ---
 
@@ -188,6 +188,27 @@ Read-only; does not extend TTL.
 
 ---
 
+### `schedule_exists(env, schedule_id: u64) -> bool`
+
+Returns `true` if a schedule with the given ID exists in storage, `false`
+otherwise.  Lets callers safely probe for schedule existence without catching a
+panic, which is particularly useful when iterating over a range of IDs.
+Read-only; does not extend TTL.
+
+---
+
+### `time_until_cliff(env, schedule_id: u64) -> u64`
+
+Returns the number of seconds until the cliff expires
+(`start_time + cliff_duration - now`), clamped to `0` via `saturating_sub`.
+Returns `0` if the cliff has already passed or if `cliff_duration` is `0`.
+Useful for frontend countdown displays and SDK clients.
+Read-only; does not extend TTL.
+
+**Panics:** `"schedule not found"` — schedule ID does not exist
+
+---
+
 ### `extend_ttl(env)`
 
 Permissionless. Extends the contract instance TTL to `INSTANCE_BUMP_LEDGERS`
@@ -236,7 +257,7 @@ See [docs/ttl.md](../../docs/ttl.md).
 
 | Topic | Data | Emitted by |
 |-------|------|-----------|
-| `("created",)` | `(id, beneficiary, total_amount)` | `create_schedule` |
+| `("created",)` | `(id, beneficiary, total_amount, token_address)` | `create_schedule` |
 | `("claimed",)` | `(schedule_id, beneficiary, amount)` | `claim` |
 | `("revoked",)` | `(schedule_id, unvested)` | `revoke` |
 | `("paused",)` | `()` | `pause` |

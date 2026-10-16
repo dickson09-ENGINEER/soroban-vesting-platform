@@ -395,6 +395,47 @@ impl VestingContract {
         (schedule.total_amount - vested).max(0)
     }
 
+    /// Return `true` if a schedule with the given ID exists in storage,
+    /// `false` otherwise.
+    ///
+    /// Clients can safely probe for schedule existence without catching a
+    /// panic, which is particularly useful when iterating over a range of IDs.
+    /// Read-only — does not extend the TTL or write any state.
+    ///
+    /// # Auth
+    /// None.
+    pub fn schedule_exists(env: Env, schedule_id: u64) -> bool {
+        env.storage()
+            .persistent()
+            .get::<DataKey, VestingSchedule>(&DataKey::Schedule(schedule_id))
+            .is_some()
+    }
+
+    /// Return the number of seconds until the cliff expires for a schedule.
+    ///
+    /// Returns `0` if the cliff has already passed (i.e. the current ledger
+    /// timestamp is at or past `start_time + cliff_duration`).
+    ///
+    /// Useful for frontend countdown displays and SDK clients that need to
+    /// show "time until cliff" without computing it client-side.
+    /// Read-only — does not extend the TTL or write any state.
+    ///
+    /// # Auth
+    /// None.
+    ///
+    /// # Panics
+    /// - `schedule_id` does not exist (`VestingError::ScheduleNotFound`)
+    pub fn time_until_cliff(env: Env, schedule_id: u64) -> u64 {
+        let schedule: VestingSchedule = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Schedule(schedule_id))
+            .unwrap_or_else(|| panic_with_error!(&env, VestingError::ScheduleNotFound));
+        let now = env.ledger().timestamp();
+        let cliff_end = schedule.start_time + schedule.cliff_duration;
+        cliff_end.saturating_sub(now)
+    }
+
     /// Extend the contract instance TTL to `INSTANCE_BUMP_LEDGERS`.
     ///
     /// This is a permissionless keep-alive for contracts that are only read
@@ -445,6 +486,7 @@ impl VestingContract {
         let id: u64 = env.storage().instance().get(&SCHED_ID).unwrap_or(0);
         let next_id = id + 1;
 
+        let token_address = params.token_address.clone();
         let schedule = VestingSchedule {
             id: next_id,
             beneficiary: params.beneficiary.clone(),
@@ -486,7 +528,12 @@ impl VestingContract {
 
         env.events().publish(
             (EVT_CREATED,),
-            (next_id, params.beneficiary, params.total_amount),
+            (
+                next_id,
+                params.beneficiary,
+                params.total_amount,
+                token_address,
+            ),
         );
 
         next_id
@@ -1210,6 +1257,7 @@ mod tests {
 
     #[test]
     fn test_event_created() {
+        use soroban_sdk::IntoVal;
         let (env, vesting_id, _admin, beneficiary, funder) = setup();
         let token = new_token(&env, &funder, 100_000);
         let vesting = VestingContractClient::new(&env, &vesting_id);
@@ -1218,23 +1266,28 @@ mod tests {
         let id = vesting.create_schedule(&CreateScheduleParams {
             from: funder.clone(),
             beneficiary: beneficiary.clone(),
-            token_address: token,
+            token_address: token.clone(),
             total_amount: 100_000,
             start_time: start,
             cliff_duration: 0,
             total_duration: 100,
         });
 
-        let events = env.events().all();
-        // Find the "created" event (last one published by vesting contract)
-        let found = !env
-            .events()
-            .all()
-            .filter_by_contract(&vesting_id)
-            .events()
-            .is_empty();
-        assert!(found, "expected 'created' event, got: {:?}", events);
-        let _ = id;
+        // The "created" event must include token_address as the fourth field so
+        // off-chain indexers tracking multiple token types can identify which
+        // token a schedule locks without an extra RPC call.
+        assert_eq!(
+            env.events().all().filter_by_contract(&vesting_id),
+            soroban_sdk::vec![
+                &env,
+                (
+                    vesting_id.clone(),
+                    (symbol_short!("created"),).into_val(&env),
+                    (id, beneficiary.clone(), 100_000i128, token.clone()).into_val(&env),
+                )
+            ],
+            "expected 'created' event with (id, beneficiary, total_amount, token_address)"
+        );
     }
 
     // ── events: claim emits "claimed" ─────────────────────────────────────────
@@ -1452,6 +1505,153 @@ mod tests {
             100_000,
             "token conservation violated: unvested={unvested} + claimable={claimable} + claimed={} != 100_000",
             schedule.claimed_amount
+        );
+    }
+
+    // ── schedule_exists ───────────────────────────────────────────────────────
+
+    /// schedule_exists returns true for a created schedule and false for an ID
+    /// that has never been created.
+    #[test]
+    fn test_schedule_exists_true_and_false() {
+        let (env, vesting_id, _admin, beneficiary, funder) = setup();
+        let token = new_token(&env, &funder, 100_000);
+        let vesting = VestingContractClient::new(&env, &vesting_id);
+        let start = env.ledger().timestamp();
+
+        // Before any schedule: ID 1 does not exist.
+        assert!(
+            !vesting.schedule_exists(&1u64),
+            "schedule_exists should be false before any schedule is created"
+        );
+
+        let id = vesting.create_schedule(&CreateScheduleParams {
+            from: funder.clone(),
+            beneficiary: beneficiary.clone(),
+            token_address: token,
+            total_amount: 100_000,
+            start_time: start,
+            cliff_duration: 0,
+            total_duration: 100,
+        });
+
+        // Existing schedule must return true.
+        assert!(
+            vesting.schedule_exists(&id),
+            "schedule_exists should be true for created schedule"
+        );
+
+        // A never-created ID must return false.
+        assert!(
+            !vesting.schedule_exists(&(id + 1)),
+            "schedule_exists should be false for a non-existent schedule ID"
+        );
+    }
+
+    /// schedule_exists remains true after claim (schedule is Completed, not deleted).
+    #[test]
+    fn test_schedule_exists_after_claim() {
+        let (env, vesting_id, _admin, beneficiary, funder) = setup();
+        let token = new_token(&env, &funder, 100_000);
+        let vesting = VestingContractClient::new(&env, &vesting_id);
+        let start = env.ledger().timestamp();
+
+        let id = vesting.create_schedule(&CreateScheduleParams {
+            from: funder.clone(),
+            beneficiary: beneficiary.clone(),
+            token_address: token,
+            total_amount: 100_000,
+            start_time: start,
+            cliff_duration: 0,
+            total_duration: 100,
+        });
+
+        // Fully claim the schedule.
+        env.ledger().with_mut(|l| l.timestamp = start + 100);
+        vesting.claim(&id);
+
+        // Schedule entry still exists in storage even after completion.
+        assert!(
+            vesting.schedule_exists(&id),
+            "schedule_exists should be true even after the schedule is completed"
+        );
+    }
+
+    // ── time_until_cliff ──────────────────────────────────────────────────────
+
+    /// time_until_cliff returns a positive value before the cliff and 0 at/after it.
+    #[test]
+    fn test_time_until_cliff_before_and_at_and_after() {
+        let (env, vesting_id, _admin, beneficiary, funder) = setup();
+        let token = new_token(&env, &funder, 100_000);
+        let vesting = VestingContractClient::new(&env, &vesting_id);
+        let start = env.ledger().timestamp();
+
+        let id = vesting.create_schedule(&CreateScheduleParams {
+            from: funder.clone(),
+            beneficiary: beneficiary.clone(),
+            token_address: token,
+            total_amount: 100_000,
+            start_time: start,
+            cliff_duration: 50,
+            total_duration: 100,
+        });
+
+        // At start: cliff_end = start + 50, now = start → 50 seconds remaining.
+        assert_eq!(
+            vesting.time_until_cliff(&id),
+            50,
+            "expected 50 seconds until cliff at start"
+        );
+
+        // At t = start + 25: 25 seconds remaining.
+        env.ledger().with_mut(|l| l.timestamp = start + 25);
+        assert_eq!(
+            vesting.time_until_cliff(&id),
+            25,
+            "expected 25 seconds until cliff at t=start+25"
+        );
+
+        // At exactly the cliff: 0 seconds remaining.
+        env.ledger().with_mut(|l| l.timestamp = start + 50);
+        assert_eq!(
+            vesting.time_until_cliff(&id),
+            0,
+            "expected 0 at the cliff boundary"
+        );
+
+        // After the cliff: still 0 (saturating_sub clamps to 0).
+        env.ledger().with_mut(|l| l.timestamp = start + 75);
+        assert_eq!(
+            vesting.time_until_cliff(&id),
+            0,
+            "expected 0 after cliff has passed"
+        );
+    }
+
+    /// time_until_cliff returns 0 immediately for a zero-cliff schedule.
+    #[test]
+    fn test_time_until_cliff_zero_cliff() {
+        let (env, vesting_id, _admin, beneficiary, funder) = setup();
+        let token = new_token(&env, &funder, 100_000);
+        let vesting = VestingContractClient::new(&env, &vesting_id);
+        let start = env.ledger().timestamp();
+
+        let id = vesting.create_schedule(&CreateScheduleParams {
+            from: funder.clone(),
+            beneficiary: beneficiary.clone(),
+            token_address: token,
+            total_amount: 100_000,
+            start_time: start,
+            cliff_duration: 0,
+            total_duration: 100,
+        });
+
+        // cliff_end == start_time, now == start_time → 0.
+        assert_eq!(
+            vesting.time_until_cliff(&id),
+            0,
+            "zero-cliff schedule should return 0 immediately"
         );
     }
 
